@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Voxel Engine</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+            font-family: monospace, sans-serif;
+            background-color: #0d1117;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 6px;
+            height: 6px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(0, 0, 0, 0.7);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #fps-counter {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="crosshair"></div>
+    <div id="fps-counter">0 FPS</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- 1. Viewport & Scene Setup ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a2230);
+        scene.fog = new THREE.FogExp2(0x1a2230, 0.035);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.physicallyCorrectLights = true;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.1;
+        document.body.appendChild(renderer.domElement);
+
+        // --- 2. Lighting Setup ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+        scene.add(ambientLight);
+
+        const hemiLight = new THREE.HemisphereLight(0xcce0ff, 0x3d352e, 0.4);
+        scene.add(hemiLight);
+
+        const sunLight = new THREE.DirectionalLight(0xfff8eb, 2.2);
+        sunLight.position.set(16, 28, 14);
+        sunLight.castShadow = true;
+
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 0.5;
+        sunLight.shadow.camera.far = 70;
+        
+        const shadowExtent = 14;
+        sunLight.shadow.camera.left = -shadowExtent;
+        sunLight.shadow.camera.right = shadowExtent;
+        sunLight.shadow.camera.top = shadowExtent;
+        sunLight.shadow.camera.bottom = -shadowExtent;
+        
+        sunLight.shadow.bias = -0.0001;
+        sunLight.shadow.normalBias = 0.04;
+        sunLight.shadow.radius = 3;
+        scene.add(sunLight);
+
+        // --- 3. Optimized Texture Generator Helper ---
+        function createCanvasTexture(drawFn) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 16;
+            canvas.height = 16;
+            const ctx = canvas.getContext('2d');
+            drawFn(ctx, 16);
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.magFilter = THREE.NearestFilter;
+            texture.minFilter = THREE.NearestFilter;
+            return texture;
+        }
+
+        const grassTexture = createCanvasTexture((ctx, size) => {
+            const shades = ['#4a7c28', '#588c30', '#3b661d', '#619c36', '#437024', '#345719'];
+            for (let x = 0; x < size; x++) {
+                for (let y = 0; y < size; y++) {
+                    const noise = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+                    ctx.fillStyle = shades[Math.floor(noise * shades.length)];
+                    ctx.fillRect(x, y, 1, 1);
+                }
+            }
+        });
+
+        const woodTexture = createCanvasTexture((ctx, size) => {
+            const highlight  = '#c2975d';
+            const baseLight  = '#b0834c';
+            const base       = '#9d723f';
+            const baseDark   = '#885e2f';
+            const shadow     = '#6e4820';
+            const darkBorder = '#4d3013';
+
+            for (let y = 0; y < size; y++) {
+                const plankIndex = Math.floor(y / 4);
+                const rowInPlank = y % 4;
+                for (let x = 0; x < size; x++) {
+                    const isVerticalSeam = (plankIndex % 2 === 0) ? (x === 7) : (x === 15);
+                    const isNearSeam     = (plankIndex % 2 === 0) ? (x === 6 || x === 8) : (x === 14 || x === 0);
+
+                    let pixelColor;
+                    if (rowInPlank === 3 || isVerticalSeam) {
+                        pixelColor = darkBorder;
+                    } else if (rowInPlank === 0) {
+                        pixelColor = isNearSeam ? baseDark : highlight;
+                    } else {
+                        const noise = Math.abs(Math.sin(x * 37.1 + y * 91.7 + plankIndex * 13.3) * 43758.5453) % 1;
+                        if (noise < 0.22) pixelColor = highlight;
+                        else if (noise < 0.55) pixelColor = baseLight;
+                        else if (noise < 0.82) pixelColor = base;
+                        else if (noise < 0.94) pixelColor = baseDark;
+                        else pixelColor = shadow;
+                    }
+                    ctx.fillStyle = pixelColor;
+                    ctx.fillRect(x, y, 1, 1);
+                }
+            }
+        });
+
+        const stoneTexture = createCanvasTexture((ctx, size) => {
+            const shades = ['#5a5a5a', '#686868', '#4f4f4f', '#757575', '#3f3f3f', '#808080'];
+            for (let x = 0; x < size; x++) {
+                for (let y = 0; y < size; y++) {
+                    const noise = Math.abs(Math.sin(x * 23.7 + y * 67.3) * 43758.5453) % 1;
+                    ctx.fillStyle = shades[Math.floor(noise * shades.length)];
+                    ctx.fillRect(x, y, 1, 1);
+                }
+            }
+        });
+
+        const grassMaterial = new THREE.MeshStandardMaterial({ map: grassTexture, roughness: 0.95, metalness: 0.0 });
+        const woodMaterial  = new THREE.MeshStandardMaterial({ map: woodTexture, roughness: 0.88, metalness: 0.0 });
+        const stoneMaterial = new THREE.MeshStandardMaterial({ map: stoneTexture, roughness: 0.95, metalness: 0.0 });
+
+        const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const nodeMatrix = new Map();
+        const activeMeshes = [];
+
+        function getNodeKey(x, y, z) {
+            return `${x},${y},${z}`;
+        }
+
+        function renderVoxelMesh(x, y, z) {
+            const rx = Math.round(x);
+            const ry = Math.round(y);
+            const rz = Math.round(z);
+            const key = getNodeKey(rx, ry, rz);
+            if (nodeMatrix.has(key)) return;
+
+            const mat = (ry > 0) ? woodMaterial : (ry === 0) ? grassMaterial : stoneMaterial;
+
+            const mesh = new THREE.Mesh(cubeGeometry, mat);
+            mesh.position.set(rx, ry, rz);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+
+            nodeMatrix.set(key, mesh);
+            activeMeshes.push(mesh);
+            return mesh;
+        }
+
+        function disposeVoxelMesh(x, y, z) {
+            const rx = Math.round(x);
+            const ry = Math.round(y);
+            const rz = Math.round(z);
+            const key = getNodeKey(rx, ry, rz);
+            if (nodeMatrix.has(key)) {
+                const mesh = nodeMatrix.get(key);
+                scene.remove(mesh);
+                nodeMatrix.delete(key);
+                const idx = activeMeshes.indexOf(mesh);
+                if (idx !== -1) activeMeshes.splice(idx, 1);
+            }
+        }
+
+        // --- 4. Populate World Grid ---
+        for (let x = -6; x <= 5; x++) {
+            for (let z = -6; z <= 5; z++) {
+                for (let y = -11; y <= 0; y++) {
+                    renderVoxelMesh(x, y, z);
+                }
+            }
+        }
+
+        // --- 5. Camera & Control System ---
+        const eyeOffset = 1.6;
+        const playerHeight = 1.8;
+        const playerRadius = 0.3;
+        camera.position.set(0, 2.1, 4);
+
+        let yaw = 0;
+        let pitch = 0;
+
+        renderer.domElement.addEventListener('click', () => {
+            renderer.domElement.requestPointerLock();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === renderer.domElement) {
+                const sensitivity = 0.002;
+                yaw -= e.movementX * sensitivity;
+                pitch -= e.movementY * sensitivity;
+
+                const maxPitch = Math.PI / 2 - 0.01;
+                pitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
+
+                camera.rotation.set(pitch, yaw, 0, 'YXZ');
+            }
+        });
+
+        // --- 6. Raycast Interaction (Optimized Ray Intersect Array) ---
+        const raycaster = new THREE.Raycaster();
+        const centerScreen = new THREE.Vector2(0, 0);
+
+        window.addEventListener('mousedown', (e) => {
+            if (document.pointerLockElement !== renderer.domElement) return;
+
+            raycaster.setFromCamera(centerScreen, camera);
+            const intersects = raycaster.intersectObjects(activeMeshes);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                const hitPos = hit.object.position;
+
+                if (e.button === 0) {
+                    disposeVoxelMesh(hitPos.x, hitPos.y, hitPos.z);
+                } else if (e.button === 2) {
+                    const norm = hit.face.normal;
+                    const targetX = Math.round(hitPos.x + norm.x);
+                    const targetY = Math.round(hitPos.y + norm.y);
+                    const targetZ = Math.round(hitPos.z + norm.z);
+
+                    const pBox = getEntityBounds(camera.position);
+                    const bBox = {
+                        minX: targetX - 0.5, maxX: targetX + 0.5,
+                        minY: targetY - 0.5, maxY: targetY + 0.5,
+                        minZ: targetZ - 0.5, maxZ: targetZ + 0.5
+                    };
+
+                    if (!evaluateBoundsOverlap(pBox, bBox)) {
+                        renderVoxelMesh(targetX, targetY, targetZ);
+                    }
+                }
+            }
+        });
+
+        window.addEventListener('contextmenu', e => e.preventDefault());
+
+        // --- 7. Optimized Physics & Collision System ---
+        const keyMap = {};
+        window.addEventListener('keydown', (e) => { keyMap[e.code] = true; });
+        window.addEventListener('keyup', (e) => { keyMap[e.code] = false; });
+
+        let verticalVelocity = 0;
+        const downwardForce = 0.0075;
+        const impulseMagnitude = 0.16;
+        let isOnGround = false;
+
+        function getEntityBounds(pos) {
+            return {
+                minX: pos.x - playerRadius,
+                maxX: pos.x + playerRadius,
+                minY: pos.y - eyeOffset,
+                maxY: pos.y - eyeOffset + playerHeight,
+                minZ: pos.z - playerRadius,
+                maxZ: pos.z + playerRadius
+            };
+        }
+
+        function evaluateBoundsOverlap(a, b) {
+            const eps = 0.001;
+            return (a.minX < b.maxX - eps && a.maxX > b.minX + eps) &&
+                   (a.minY < b.maxY - eps && a.maxY > b.minY + eps) &&
+                   (a.minZ < b.maxZ - eps && a.maxZ > b.minZ + eps);
+        }
+
+        function checkVoxelCollisions(aabb) {
+            const minX = Math.floor(aabb.minX + 0.5);
+            const maxX = Math.floor(aabb.maxX + 0.5);
+            const minY = Math.floor(aabb.minY + 0.5);
+            const maxY = Math.floor(aabb.maxY + 0.5);
+            const minZ = Math.floor(aabb.minZ + 0.5);
+            const maxZ = Math.floor(aabb.maxZ + 0.5);
+
+            const collisions = [];
+            for (let x = minX; x <= maxX; x++) {
+                for (let y = minY; y <= maxY; y++) {
+                    for (let z = minZ; z <= maxZ; z++) {
+                        if (nodeMatrix.has(getNodeKey(x, y, z))) {
+                            collisions.push({
+                                minX: x - 0.5, maxX: x + 0.5,
+                                minY: y - 0.5, maxY: y + 0.5,
+                                minZ: z - 0.5, maxZ: z + 0.5
+                            });
+                        }
+                    }
+                }
+            }
+            return collisions;
+        }
+
+        function computeKinematics() {
+            const moveSpeed = 0.07;
+            const forwardX = -Math.sin(yaw);
+            const forwardZ = -Math.cos(yaw);
+            const rightX = Math.cos(yaw);
+            const rightZ = -Math.sin(yaw);
+
+            let dx = 0;
+            let dz = 0;
+
+            if (keyMap['KeyW'] || keyMap['ArrowUp']) { dx += forwardX * moveSpeed; dz += forwardZ * moveSpeed; }
+            if (keyMap['KeyS'] || keyMap['ArrowDown']) { dx -= forwardX * moveSpeed; dz -= forwardZ * moveSpeed; }
+            if (keyMap['KeyA'] || keyMap['ArrowLeft']) { dx -= rightX * moveSpeed; dz -= rightZ * moveSpeed; }
+            if (keyMap['KeyD'] || keyMap['ArrowRight']) { dx += rightX * moveSpeed; dz += rightZ * moveSpeed; }
+
+            if (keyMap['Space'] && isOnGround) {
+                verticalVelocity = impulseMagnitude;
+                isOnGround = false;
+            }
+
+            // Resolve Vertical Movement (Y-axis)
+            verticalVelocity -= downwardForce;
+            camera.position.y += verticalVelocity;
+            let pBox = getEntityBounds(camera.position);
+            let nodes = checkVoxelCollisions(pBox);
+
+            isOnGround = false;
+            for (let b of nodes) {
+                if (evaluateBoundsOverlap(pBox, b)) {
+                    if (verticalVelocity < 0) {
+                        camera.position.y = b.maxY + eyeOffset;
+                        verticalVelocity = 0;
+                        isOnGround = true;
+                    } else if (verticalVelocity > 0) {
+                        camera.position.y = b.minY + eyeOffset - playerHeight;
+                        verticalVelocity = 0;
+                    }
+                    pBox = getEntityBounds(camera.position);
+                }
+            }
+
+            // Resolve Horizontal Movement (X-axis)
+            camera.position.x += dx;
+            pBox = getEntityBounds(camera.position);
+            nodes = checkVoxelCollisions(pBox);
+            for (let b of nodes) {
+                if (evaluateBoundsOverlap(pBox, b)) {
+                    if (dx > 0) camera.position.x = b.minX - playerRadius;
+                    else if (dx < 0) camera.position.x = b.maxX + playerRadius;
+                    pBox = getEntityBounds(camera.position);
+                }
+            }
+
+            // Resolve Depth Movement (Z-axis)
+            camera.position.z += dz;
+            pBox = getEntityBounds(camera.position);
+            nodes = checkVoxelCollisions(pBox);
+            for (let b of nodes) {
+                if (evaluateBoundsOverlap(pBox, b)) {
+                    if (dz > 0) camera.position.z = b.minZ - playerRadius;
+                    else if (dz < 0) camera.position.z = b.maxZ + playerRadius;
+                    pBox = getEntityBounds(camera.position);
+                }
+            }
+
+            // Fall Boundary Reset
+            if (camera.position.y < -35) {
+                camera.position.set(0, 2.1, 0);
+                verticalVelocity = 0;
+            }
+        }
+
+        // --- 8. Event Handling & Main Loop ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        const fpsElement = document.getElementById('fps-counter');
+        let frameCount = 0;
+        let lastTime = performance.now();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // FPS Tracker
+            frameCount++;
+            const now = performance.now();
+            if (now - lastTime >= 250) {
+                const fps = Math.round((frameCount * 1000) / (now - lastTime));
+                fpsElement.textContent = `${fps} FPS`;
+                frameCount = 0;
+                lastTime = now;
+            }
+
+            computeKinematics();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
