@@ -22,20 +22,213 @@
             border-radius: 50%;
             transform: translate(-50%, -50%);
             pointer-events: none; z-index: 10;
+            display: none;
         }
         #fps-counter {
             position: absolute; top: 12px; left: 12px;
             color: #ffffff; font-size: 14px; font-weight: bold;
             pointer-events: none; z-index: 10;
+            display: none;
         }
-        
+        body.playing #crosshair { display: block; }
+        body.playing #fps-counter { display: block; }
 
+        /* ============================================================
+           MAIN MENU
+           ============================================================ */
+        #menu {
+            position: fixed; inset: 0; z-index: 100;
+            display: flex; align-items: center; justify-content: center;
+            color: #e8eef6;
+            background: radial-gradient(circle at 50% 45%,
+                        rgba(6, 10, 18, 0.10) 0%,
+                        rgba(6, 10, 18, 0.62) 100%);
+            padding: 16px;
+        }
+        #menu.hidden { display: none; }
+
+        .menu-panel {
+            width: min(94vw, 540px);
+            max-height: 88vh;
+            overflow-y: auto;
+            padding: 26px 26px 22px;
+            background: rgba(13, 17, 23, 0.84);
+            border: 1px solid rgba(120, 160, 210, 0.28);
+            border-radius: 14px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6),
+                        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            display: flex; flex-direction: column; gap: 10px;
+            animation: menuIn 0.22s ease;
+        }
+        @keyframes menuIn {
+            from { opacity: 0; transform: translateY(10px) scale(0.99); }
+            to   { opacity: 1; transform: none; }
+        }
+        .menu-panel.hidden { display: none; }
+
+        .menu-panel h1 {
+            font-size: 26px; letter-spacing: 6px; text-align: center;
+            color: #cfe3ff;
+            text-shadow: 0 0 22px rgba(90, 160, 255, 0.55);
+        }
+        .menu-panel h2 {
+            font-size: 15px; letter-spacing: 4px; text-transform: uppercase;
+            color: #9fb6d4; margin-bottom: 4px;
+        }
+        .menu-panel .sub {
+            text-align: center; font-size: 11px; color: #7d8ea6;
+            letter-spacing: 1px; margin-bottom: 14px;
+        }
+        .lbl {
+            font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+            color: #8ba0bb; margin-top: 4px;
+        }
+        .hint { font-size: 11px; color: #71849c; line-height: 1.5; }
+
+        .mbtn {
+            appearance: none; -webkit-appearance: none;
+            border: 1px solid rgba(120, 160, 210, 0.35);
+            background: rgba(30, 42, 60, 0.78);
+            color: #dbe7f7; font: inherit; font-size: 13px;
+            letter-spacing: 2px; text-transform: uppercase;
+            padding: 13px 16px; border-radius: 9px; cursor: pointer;
+            transition: background .15s, border-color .15s, transform .08s, box-shadow .15s;
+        }
+        .mbtn:hover {
+            background: rgba(48, 72, 104, 0.92);
+            border-color: rgba(140, 190, 255, 0.7);
+            box-shadow: 0 0 18px rgba(90, 166, 255, 0.18);
+        }
+        .mbtn:active { transform: translateY(1px); }
+        .mbtn:disabled { opacity: 0.35; cursor: not-allowed; box-shadow: none; }
+        .mbtn.primary {
+            background: linear-gradient(180deg, #2f7a4a, #215a36);
+            border-color: #3f9a5f; color: #eafff1;
+        }
+        .mbtn.primary:hover {
+            background: linear-gradient(180deg, #3a9159, #27693f);
+            border-color: #56c47c;
+        }
+        .mbtn.ghost { background: transparent; }
+
+        .txt {
+            width: 100%; padding: 12px 13px; border-radius: 9px;
+            background: rgba(8, 12, 18, 0.9);
+            border: 1px solid rgba(120, 160, 210, 0.3);
+            color: #e6f0ff; font: inherit; font-size: 14px; outline: none;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        .txt:focus {
+            border-color: #5aa6ff;
+            box-shadow: 0 0 0 3px rgba(90, 166, 255, 0.16);
+        }
+        select.txt { cursor: pointer; }
+
+        .row { display: flex; gap: 8px; }
+        .row .mbtn { flex: 1; }
+
+        .world-list {
+            display: flex; flex-direction: column; gap: 8px;
+            max-height: 46vh; overflow-y: auto; padding-right: 4px;
+            margin: 4px 0 6px;
+        }
+        .world-list::-webkit-scrollbar { width: 8px; }
+        .world-list::-webkit-scrollbar-thumb {
+            background: rgba(90, 130, 180, 0.4); border-radius: 4px;
+        }
+        .empty { color: #6f8199; font-size: 12px; text-align: center; padding: 22px 0; }
+
+        .world-card {
+            display: flex; align-items: center; gap: 10px;
+            padding: 8px; border-radius: 10px; cursor: pointer;
+            background: rgba(28, 38, 52, 0.72);
+            border: 1px solid rgba(120, 160, 210, 0.2);
+            transition: background .15s, border-color .15s, box-shadow .15s;
+        }
+        .world-card:hover { background: rgba(44, 62, 86, 0.92); }
+        .world-card.selected {
+            border-color: #5aa6ff;
+            box-shadow: 0 0 0 1px #5aa6ff inset, 0 0 20px rgba(90, 166, 255, 0.25);
+        }
+        .world-card img {
+            width: 88px; height: 55px; object-fit: cover;
+            border-radius: 6px; background: #0b1017; flex: none;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .world-info { flex: 1; min-width: 0; }
+        .world-name {
+            font-size: 13px; color: #e2ecfa;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .world-date { font-size: 10px; color: #7f92ab; margin-top: 4px; }
+        .world-actions { display: flex; flex-direction: column; gap: 4px; }
+        .mini {
+            appearance: none; border: 1px solid rgba(120, 160, 210, 0.3);
+            background: rgba(20, 28, 40, 0.9); color: #a9bdd6;
+            font: inherit; font-size: 9px; letter-spacing: 1px;
+            padding: 5px 7px; border-radius: 6px; cursor: pointer;
+            transition: .15s;
+        }
+        .mini:hover { background: rgba(56, 82, 116, 0.95); color: #e2ecfa; }
+        .mini.danger:hover {
+            background: rgba(120, 40, 46, 0.95);
+            border-color: #a04a52; color: #ffd9dc;
+        }
     </style>
 </head>
 <body>
 
     <div id="crosshair"></div>
     <div id="fps-counter">0 FPS</div>
+
+    <!-- ============================================================
+         MAIN MENU OVERLAY
+         ============================================================ -->
+    <div id="menu">
+        <div class="menu-panel" id="menu-main">
+            <h1>VOXEL WORLD</h1>
+            <p class="sub">A tiny 3D voxel engine</p>
+            <button class="mbtn" id="btn-new">New World</button>
+            <button class="mbtn" id="btn-play">Play World</button>
+            <button class="mbtn" id="btn-settings">Settings</button>
+        </div>
+
+        <div class="menu-panel hidden" id="panel-new">
+            <h2>New World</h2>
+            <label class="lbl" for="world-name">World name</label>
+            <input id="world-name" class="txt" type="text" maxlength="24" placeholder="My World" autocomplete="off" />
+            <button class="mbtn primary" id="btn-create">Join</button>
+            <button class="mbtn" id="btn-import">Import .vwf</button>
+            <input type="file" id="file-import" accept=".vwf,application/json" hidden />
+            <button class="mbtn ghost" data-back>Back</button>
+        </div>
+
+        <div class="menu-panel hidden" id="panel-play">
+            <h2>Play World</h2>
+            <div id="world-list" class="world-list"></div>
+            <div class="row">
+                <button class="mbtn primary" id="btn-play-selected" disabled>Play</button>
+                <button class="mbtn" id="btn-export" disabled>Export .vwf</button>
+            </div>
+            <button class="mbtn ghost" data-back>Back</button>
+        </div>
+
+        <div class="menu-panel hidden" id="panel-settings">
+            <h2>Settings</h2>
+            <label class="lbl" for="quality">Quality</label>
+            <select id="quality" class="txt">
+                <option value="min">Min</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+            </select>
+            <p class="hint" id="quality-hint"></p>
+            <button class="mbtn ghost" data-back>Back</button>
+        </div>
+    </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
@@ -647,6 +840,7 @@
             idx.push(baseIndex, baseIndex+1, baseIndex+2, baseIndex, baseIndex+2, baseIndex+3);
         }
 
+        // Original flat-world material layering, keyed purely off Y
         function blockTypeAt(y) {
             if (y > 0) return 'wood';
             if (y === 0) return 'grass';
@@ -720,15 +914,57 @@
             meshDirty = false;
         }
 
-        // ---- Populate world (32x32 grid, 12 layers deep) ----
-        for (let x = -16; x <= 15; x++) {
-            for (let z = -16; z <= 15; z++) {
-                for (let y = -11; y <= 0; y++) {
-                    solidVoxels.add(packKey(x, y, z));
+        // ---- World generation: original flat world (32x32 grid, 12 layers deep) ----
+        // The `seed` argument is kept for save-file compatibility but is unused,
+        // because a flat world is identical every time.
+        function generateTerrain(seed) {
+            solidVoxels.clear();
+            for (let x = -16; x <= 15; x++) {
+                for (let z = -16; z <= 15; z++) {
+                    for (let y = -11; y <= 0; y++) {
+                        solidVoxels.add(packKey(x, y, z));
+                    }
                 }
             }
+            meshDirty = true;
         }
-        buildWorldMesh();
+
+        // ---- Serialization helpers ----
+        function serializeVoxels() {
+            const arr = new Int32Array(solidVoxels.size);
+            let i = 0;
+            for (const k of solidVoxels) arr[i++] = k;
+            return int32ToBase64(arr);
+        }
+        function deserializeVoxels(b64) {
+            solidVoxels.clear();
+            const arr = base64ToInt32(b64);
+            for (let i = 0; i < arr.length; i++) solidVoxels.add(arr[i]);
+            meshDirty = true;
+        }
+        function int32ToBase64(arr) {
+            const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+            let s = '';
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {
+                s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+            }
+            return btoa(s);
+        }
+        function base64ToInt32(b64) {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new Int32Array(bytes.buffer);
+        }
+
+        function surfaceYAt(x, z) {
+            const rx = Math.round(x), rz = Math.round(z);
+            for (let y = 20; y >= -12; y--) {
+                if (solidVoxels.has(packKey(rx, y, rz))) return y;
+            }
+            return -12;
+        }
 
         // ============================================================
         // 9. CAMERA CONTROLS (pointer lock + sprint + crouch)
@@ -1095,11 +1331,497 @@
             }
 
             updateDayNightCycle(delta);
-            computeKinematics();
+
+            if (appState === 'menu') {
+                updateMenuCamera(delta);
+            } else {
+                computeKinematics();
+            }
+
             if (meshDirty) buildWorldMesh();
             updateGodRayUniforms();
-            composer.render();
+
+            if (usePostProcessing) composer.render();
+            else renderer.render(scene, camera);
         }
+
+        // ============================================================
+        // 14. SAVE SYSTEM + WORLD MANAGEMENT
+        // ============================================================
+        const STORAGE_KEY  = 'voxelworld.saves.v1';
+        const SETTINGS_KEY = 'voxelworld.settings.v1';
+
+        let appState = 'menu';          // 'menu' | 'playing'
+        let worlds = [];                // saved world records
+        let selectedWorldId = null;
+        let previewWorld = null;        // world currently loaded into the scene
+        let currentWorld = null;        // world currently being played
+        let menuOrbitAngle = Math.PI * 0.25;
+        let usePostProcessing = true;
+
+        const menuEl = document.getElementById('menu');
+
+        const PLACEHOLDER_THUMB = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="176" height="110">' +
+            '<rect width="176" height="110" fill="#151d28"/>' +
+            '<text x="88" y="59" fill="#465a72" font-family="monospace" font-size="12" text-anchor="middle">NO IMAGE</text>' +
+            '</svg>');
+
+        function saveWorlds() {
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(worlds)); }
+            catch (e) { console.warn('Could not save worlds:', e); }
+        }
+        function loadWorlds() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                const parsed = raw ? JSON.parse(raw) : [];
+                worlds = Array.isArray(parsed) ? parsed : [];
+            } catch (e) { worlds = []; }
+        }
+
+        function createWorldRecord(name, seed, voxels, id) {
+            const now = Date.now();
+            return {
+                id: id || ('w' + now.toString(36) + Math.random().toString(36).slice(2, 7)),
+                name: name || 'World',
+                seed: (seed === undefined || seed === null) ? ((Math.random() * 0x7fffffff) | 0) : (seed | 0),
+                voxels: voxels || null,
+                thumb: null,
+                created: now,
+                updated: now
+            };
+        }
+
+        // ---- Load a world record into the live scene ----
+        function setPreviewWorld(world) {
+            previewWorld = world;
+            if (world.voxels) {
+                deserializeVoxels(world.voxels);
+            } else {
+                generateTerrain(world.seed);
+            }
+            buildWorldMesh();
+        }
+
+        // ---- Screenshot the scene for the world thumbnail ----
+        function captureThumbnail(w, h) {
+            w = w || 176; h = h || 110;
+            const prevRatio = renderer.getPixelRatio();
+
+            const cam = new THREE.PerspectiveCamera(58, w / h, 0.1, 1000);
+            cam.position.set(23, 15, 23);
+            cam.lookAt(0, -1, 0);
+
+            renderer.setRenderTarget(null);
+            renderer.setPixelRatio(1);
+            renderer.setSize(w, h, false);
+            renderer.render(scene, cam);
+
+            let data = '';
+            try { data = renderer.domElement.toDataURL('image/jpeg', 0.6); }
+            catch (e) { data = ''; }
+
+            renderer.setPixelRatio(prevRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+            bloomPass.setSize(window.innerWidth, window.innerHeight);
+
+            return data;
+        }
+
+        // ---- Export / import .vwf ----
+        function exportWorld(world) {
+            const payload = {
+                format: 'vwf',
+                version: 1,
+                name: world.name,
+                seed: world.seed,
+                created: world.created,
+                voxels: world.voxels || ''
+            };
+            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = (world.name || 'world').replace(/[^\w\-]+/g, '_') + '.vwf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1500);
+        }
+
+        function onImportFile(e) {
+            const file = e.target.files && e.target.files[0];
+            e.target.value = '';
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    const data = JSON.parse(String(reader.result));
+                    if (!data || data.format !== 'vwf' || typeof data.voxels !== 'string') {
+                        throw new Error('invalid');
+                    }
+                    const world = createWorldRecord(
+                        data.name || file.name.replace(/\.vwf$/i, ''),
+                        data.seed,
+                        data.voxels,
+                        null
+                    );
+                    world.created = data.created || Date.now();
+                    world.updated = Date.now();
+
+                    setPreviewWorld(world);
+                    world.thumb = captureThumbnail();
+
+                    worlds.unshift(world);
+                    selectedWorldId = world.id;
+                    saveWorlds();
+                    renderWorldList();
+
+                    startGame(world);
+                } catch (err) {
+                    alert('Could not import: this is not a valid .vwf file.');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // ============================================================
+        // 15. MENU UI
+        // ============================================================
+        function showPanel(name) {
+            document.getElementById('menu-main').classList.toggle('hidden', name !== 'main');
+            document.getElementById('panel-new').classList.toggle('hidden', name !== 'new');
+            document.getElementById('panel-play').classList.toggle('hidden', name !== 'play');
+            document.getElementById('panel-settings').classList.toggle('hidden', name !== 'settings');
+
+            if (name === 'play') renderWorldList();
+            if (name === 'settings') {
+                document.getElementById('quality').value = settings.quality;
+                updateQualityHint();
+            }
+        }
+
+        function updatePlayButtons() {
+            const has = !!selectedWorldId && worlds.some(w => w.id === selectedWorldId);
+            document.getElementById('btn-play-selected').disabled = !has;
+            document.getElementById('btn-export').disabled = !has;
+        }
+
+        function renderWorldList() {
+            const list = document.getElementById('world-list');
+            list.innerHTML = '';
+
+            if (!worlds.length) {
+                const p = document.createElement('p');
+                p.className = 'empty';
+                p.textContent = 'No worlds yet — create one!';
+                list.appendChild(p);
+                updatePlayButtons();
+                return;
+            }
+
+            for (const w of worlds) {
+                const card = document.createElement('div');
+                card.className = 'world-card' + (w.id === selectedWorldId ? ' selected' : '');
+                card.dataset.id = w.id;
+
+                const img = document.createElement('img');
+                img.src = w.thumb || PLACEHOLDER_THUMB;
+                img.alt = '';
+                img.draggable = false;
+                card.appendChild(img);
+
+                const info = document.createElement('div');
+                info.className = 'world-info';
+                const nm = document.createElement('div');
+                nm.className = 'world-name';
+                nm.textContent = w.name;
+                const dt = document.createElement('div');
+                dt.className = 'world-date';
+                dt.textContent = new Date(w.updated || w.created).toLocaleString();
+                info.appendChild(nm);
+                info.appendChild(dt);
+                card.appendChild(info);
+
+                const actions = document.createElement('div');
+                actions.className = 'world-actions';
+                const ex = document.createElement('button');
+                ex.className = 'mini';
+                ex.textContent = 'EXPORT';
+                ex.dataset.act = 'export';
+                const del = document.createElement('button');
+                del.className = 'mini danger';
+                del.textContent = 'DEL';
+                del.dataset.act = 'delete';
+                actions.appendChild(ex);
+                actions.appendChild(del);
+                card.appendChild(actions);
+
+                card.addEventListener('click', (ev) => {
+                    const act = ev.target && ev.target.dataset ? ev.target.dataset.act : null;
+                    if (act === 'export') { ev.stopPropagation(); exportWorld(w); return; }
+                    if (act === 'delete') { ev.stopPropagation(); deleteWorld(w); return; }
+                    selectWorld(w);
+                });
+                card.addEventListener('dblclick', () => startGame(w));
+
+                list.appendChild(card);
+            }
+
+            updatePlayButtons();
+        }
+
+        function selectWorld(w) {
+            selectedWorldId = w.id;
+            setPreviewWorld(w);
+            renderWorldList();
+        }
+
+        function deleteWorld(w) {
+            if (!confirm('Delete world "' + w.name + '"?')) return;
+            worlds = worlds.filter(x => x.id !== w.id);
+            if (selectedWorldId === w.id) selectedWorldId = null;
+            saveWorlds();
+            renderWorldList();
+        }
+
+        // ---- New world ----
+        function onCreateWorld() {
+            const input = document.getElementById('world-name');
+            const name = (input.value || '').trim() || 'New World';
+
+            const world = createWorldRecord(name, null, null, null);
+            setPreviewWorld(world);                 // generate fresh flat world
+            world.voxels = serializeVoxels();       // bake it so it is reproducible
+            world.thumb = captureThumbnail();
+
+            worlds.unshift(world);
+            selectedWorldId = world.id;
+            saveWorlds();
+            renderWorldList();
+            input.value = '';
+
+            startGame(world);
+        }
+
+        // ============================================================
+        // 16. GAME ENTRY / EXIT
+        // ============================================================
+        function startGame(world) {
+            if (!world) return;
+            currentWorld = world;
+
+            if (previewWorld !== world) setPreviewWorld(world);
+
+            // Spawn safely on top of the terrain near the middle
+            const sx = 0.5, sz = 4.5;
+            const top = surfaceYAt(sx, sz);
+            camera.position.set(sx, top + 2.1, sz);
+            verticalVelocity = 0;
+            isOnGround = false;
+            yaw = 0;
+            pitch = 0;
+            eyeOffset = standEyeOffset;
+            playerHeight = standPlayerHeight;
+            camera.rotation.set(pitch, yaw, 0, 'YXZ');
+
+            appState = 'playing';
+            menuEl.classList.add('hidden');
+            document.body.classList.add('playing');
+
+            renderer.domElement.requestPointerLock();
+        }
+
+        function exitToMenu() {
+            if (appState !== 'playing') return;
+            appState = 'menu';
+
+            if (currentWorld) {
+                currentWorld.voxels = serializeVoxels();
+                currentWorld.updated = Date.now();
+                currentWorld.thumb = captureThumbnail();
+                saveWorlds();
+                previewWorld = currentWorld;
+            }
+            currentWorld = null;
+
+            document.body.classList.remove('playing');
+            menuEl.classList.remove('hidden');
+            renderWorldList();
+            showPanel('main');
+
+            if (document.pointerLockElement) document.exitPointerLock();
+        }
+
+        document.addEventListener('pointerlockchange', () => {
+            if (appState === 'playing' && document.pointerLockElement !== renderer.domElement) {
+                exitToMenu();
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Escape' && appState === 'playing') exitToMenu();
+        });
+
+        // ============================================================
+        // 17. SETTINGS / QUALITY
+        // ============================================================
+        const QUALITY_PRESETS = {
+            min:    { pixelRatio: 0.55, shadows: false, shadowSize: 512,  bloom: false, godRays: false, halation: false, post: false },
+            low:    { pixelRatio: 0.75, shadows: true,  shadowSize: 1024, bloom: true,  godRays: false, halation: false, post: true  },
+            medium: { pixelRatio: 1.00, shadows: true,  shadowSize: 1024, bloom: true,  godRays: true,  halation: false, post: true  },
+            high:   { pixelRatio: 1.50, shadows: true,  shadowSize: 2048, bloom: true,  godRays: true,  halation: true,  post: true  },
+            max:    { pixelRatio: 2.00, shadows: true,  shadowSize: 4096, bloom: true,  godRays: true,  halation: true,  post: true  }
+        };
+
+        const QUALITY_HINTS = {
+            min:    'Fastest. No shadows, no post-processing, reduced resolution.',
+            low:    'Light shadows and bloom only. Good for weak GPUs.',
+            medium: 'Adds volumetric god rays. Balanced performance.',
+            high:   'Full post-processing stack with soft shadows. Recommended.',
+            max:    'Maximum shadow resolution and full effects. Heavy.'
+        };
+
+        let settings = { quality: 'high' };
+
+        function refreshMaterialShadows() {
+            scene.traverse((o) => {
+                if (!o.material) return;
+                const m = o.material;
+                if (Array.isArray(m)) m.forEach(mm => { mm.needsUpdate = true; });
+                else m.needsUpdate = true;
+            });
+        }
+
+        function applyQuality(name) {
+            const key = QUALITY_PRESETS[name] ? name : 'high';
+            const q = QUALITY_PRESETS[key];
+            settings.quality = key;
+
+            const pr = Math.min(window.devicePixelRatio, q.pixelRatio);
+            renderer.setPixelRatio(pr);
+            composer.setPixelRatio(pr);
+
+            renderer.shadowMap.enabled = q.shadows;
+            sunLight.castShadow = q.shadows;
+            if (sunLight.shadow.map) {
+                sunLight.shadow.map.dispose();
+                sunLight.shadow.map = null;
+            }
+            sunLight.shadow.mapSize.width = q.shadowSize;
+            sunLight.shadow.mapSize.height = q.shadowSize;
+
+            bloomPass.enabled = q.bloom;
+            godRaysPass.enabled = q.godRays;
+            halationPass.enabled = q.halation;
+            usePostProcessing = q.post;
+
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+            bloomPass.setSize(window.innerWidth, window.innerHeight);
+            halationUniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+
+            refreshMaterialShadows();
+            saveSettings();
+        }
+
+        function updateQualityHint() {
+            document.getElementById('quality-hint').textContent =
+                QUALITY_HINTS[settings.quality] || '';
+        }
+
+        function saveSettings() {
+            try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+        }
+        function loadSettings() {
+            try {
+                const raw = localStorage.getItem(SETTINGS_KEY);
+                if (raw) {
+                    const s = JSON.parse(raw);
+                    if (s && QUALITY_PRESETS[s.quality]) settings.quality = s.quality;
+                }
+            } catch (e) {}
+        }
+
+        // ============================================================
+        // 18. MENU EVENT WIRING
+        // ============================================================
+        function wireMenuEvents() {
+            document.getElementById('btn-new').addEventListener('click', () => {
+                showPanel('new');
+                const i = document.getElementById('world-name');
+                i.focus();
+            });
+            document.getElementById('btn-play').addEventListener('click', () => showPanel('play'));
+            document.getElementById('btn-settings').addEventListener('click', () => showPanel('settings'));
+
+            document.querySelectorAll('[data-back]').forEach(btn => {
+                btn.addEventListener('click', () => showPanel('main'));
+            });
+
+            document.getElementById('btn-create').addEventListener('click', onCreateWorld);
+            document.getElementById('world-name').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') onCreateWorld();
+            });
+
+            document.getElementById('btn-import').addEventListener('click', () => {
+                document.getElementById('file-import').click();
+            });
+            document.getElementById('file-import').addEventListener('change', onImportFile);
+
+            document.getElementById('btn-play-selected').addEventListener('click', () => {
+                const w = worlds.find(x => x.id === selectedWorldId);
+                if (w) startGame(w);
+            });
+            document.getElementById('btn-export').addEventListener('click', () => {
+                const w = worlds.find(x => x.id === selectedWorldId);
+                if (w) exportWorld(w);
+            });
+
+            document.getElementById('quality').addEventListener('change', (e) => {
+                applyQuality(e.target.value);
+                updateQualityHint();
+            });
+        }
+
+        // ============================================================
+        // 19. MENU BACKGROUND CAMERA (slow orbit around world center)
+        // ============================================================
+        function updateMenuCamera(delta) {
+            menuOrbitAngle += delta * 0.10;
+            const radius = 24;
+            const height = 12.5;
+            camera.position.set(
+                Math.sin(menuOrbitAngle) * radius,
+                height,
+                Math.cos(menuOrbitAngle) * radius
+            );
+            camera.lookAt(0, -1, 0);
+        }
+
+        // ============================================================
+        // 20. INIT
+        // ============================================================
+        loadSettings();
+        applyQuality(settings.quality);
+        updateQualityHint();
+
+        loadWorlds();
+
+        if (worlds.length > 0) {
+            selectedWorldId = worlds[0].id;
+            setPreviewWorld(worlds[0]);
+        } else {
+            // Fresh install: show the flat world in the background
+            const w = createWorldRecord('Preview', null, null, 'preview');
+            setPreviewWorld(w);
+        }
+
+        wireMenuEvents();
+        renderWorldList();
+        showPanel('main');
 
         animate();
     </script>
