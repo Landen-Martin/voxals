@@ -5,12 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3D Voxel Engine</title>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             overflow: hidden;
             user-select: none;
@@ -18,37 +13,23 @@
             font-family: monospace, sans-serif;
             background-color: #0d1117;
         }
-
-        canvas {
-            display: block;
-            width: 100vw;
-            height: 100vh;
-        }
-
+        canvas { display: block; width: 100vw; height: 100vh; }
         #crosshair {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 6px;
-            height: 6px;
+            position: absolute; top: 50%; left: 50%;
+            width: 6px; height: 6px;
             background-color: rgba(255, 255, 255, 0.9);
             border: 1px solid rgba(0, 0, 0, 0.7);
             border-radius: 50%;
             transform: translate(-50%, -50%);
-            pointer-events: none;
-            z-index: 10;
+            pointer-events: none; z-index: 10;
         }
-
         #fps-counter {
-            position: absolute;
-            top: 12px;
-            left: 12px;
-            color: #ffffff;
-            font-size: 14px;
-            font-weight: bold;
-            pointer-events: none;
-            z-index: 10;
+            position: absolute; top: 12px; left: 12px;
+            color: #ffffff; font-size: 14px; font-weight: bold;
+            pointer-events: none; z-index: 10;
         }
+        
+
     </style>
 </head>
 <body>
@@ -57,53 +38,451 @@
     <div id="fps-counter">0 FPS</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 
     <script>
-        // --- 1. Viewport & Scene Setup ---
+        // ============================================================
+        // 1. RENDERER, SCENE, CAMERA
+        // ============================================================
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x1a2230);
-        scene.fog = new THREE.FogExp2(0x1a2230, 0.035);
+        scene.background = new THREE.Color(0x8fc4f0);
+        scene.fog = new THREE.FogExp2(0x8fc4f0, 0.024);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-        
+
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        // Lower pixel-ratio cap = big perf win on high-DPI displays
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         renderer.physicallyCorrectLights = true;
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.1;
+        renderer.toneMappingExposure = 1.12;
         document.body.appendChild(renderer.domElement);
 
-        // --- 2. Lighting Setup ---
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+        // ============================================================
+        // 2. POST-PROCESSING (bloom + god rays + halation)
+        // ============================================================
+        const composer = new THREE.EffectComposer(renderer);
+        composer.setSize(window.innerWidth, window.innerHeight);
+        composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+
+        composer.addPass(new THREE.RenderPass(scene, camera));
+
+        const bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            0.28, 0.5, 0.88
+        );
+        composer.addPass(bloomPass);
+
+        const godRaysUniforms = {
+            tDiffuse:    { value: null },
+            sunPosition: { value: new THREE.Vector2(0.5, 0.5) },
+            density:     { value: 0.9 },
+            decay:       { value: 0.965 },
+            weight:      { value: 4.5 },
+            exposure:    { value: 0.35 },
+            threshold:   { value: 0.78 },
+            visibility:  { value: 0.0 },
+            rayTint:     { value: new THREE.Color(1.0, 0.85, 0.6) }
+        };
+
+        const godRaysPass = new THREE.ShaderPass({
+            uniforms: godRaysUniforms,
+            vertexShader: `
+                varying vec2 vUv;
+                void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+            `,
+            fragmentShader: `
+                #define NUM_SAMPLES 24
+                uniform sampler2D tDiffuse;
+                uniform vec2 sunPosition;
+                uniform float density, decay, weight, exposure, threshold, visibility;
+                uniform vec3 rayTint;
+                varying vec2 vUv;
+                void main() {
+                    vec4 base = texture2D(tDiffuse, vUv);
+                    vec3 rays = vec3(0.0);
+                    if (visibility > 0.001) {
+                        vec2 delta = (vUv - sunPosition) * (1.0 / float(NUM_SAMPLES)) * density;
+                        vec2 coord = vUv;
+                        float illum = 1.0;
+                        for (int i = 0; i < NUM_SAMPLES; i++) {
+                            coord -= delta;
+                            vec3 s = texture2D(tDiffuse, coord).rgb;
+                            float lum = dot(s, vec3(0.2126, 0.7152, 0.0722));
+                            rays += s * max(lum - threshold, 0.0) * illum * weight;
+                            illum *= decay;
+                        }
+                        rays *= exposure * visibility;
+                    }
+                    gl_FragColor = vec4(base.rgb + rays * rayTint, base.a);
+                }
+            `
+        });
+        composer.addPass(godRaysPass);
+
+        const halationUniforms = {
+            tDiffuse:   { value: null },
+            strength:   { value: 0.55 },
+            threshold:  { value: 0.82 },
+            radius1:    { value: 11.0 },
+            radius2:    { value: 30.0 },
+            resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+            tint:       { value: new THREE.Color(1.0, 0.32, 0.15) }
+        };
+
+        const halationPass = new THREE.ShaderPass({
+            uniforms: halationUniforms,
+            vertexShader: `
+                varying vec2 vUv;
+                void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform float strength, threshold, radius1, radius2;
+                uniform vec2 resolution;
+                uniform vec3 tint;
+                varying vec2 vUv;
+                float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+                void main() {
+                    vec4 base = texture2D(tDiffuse, vUv);
+                    vec3 glow = vec3(0.0);
+                    for (int i = 0; i < 6; i++) {
+                        float a = float(i) * 1.0471975512;
+                        vec2 o1 = vec2(cos(a), sin(a)) * radius1 / resolution;
+                        vec3 s1 = texture2D(tDiffuse, vUv + o1).rgb;
+                        glow += s1 * max(lum(s1) - threshold, 0.0);
+                        float a2 = a + 0.5235987756;
+                        vec2 o2 = vec2(cos(a2), sin(a2)) * radius2 / resolution;
+                        vec3 s2 = texture2D(tDiffuse, vUv + o2).rgb;
+                        glow += s2 * max(lum(s2) - threshold, 0.0) * 0.5;
+                    }
+                    glow /= 9.0;
+                    gl_FragColor = vec4(base.rgb + glow * tint * strength, base.a);
+                }
+            `
+        });
+        composer.addPass(halationPass);
+
+        // ============================================================
+        // 3. LIGHTING — balanced for readable pixel textures + realistic sky
+        // ============================================================
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.50);
         scene.add(ambientLight);
 
-        const hemiLight = new THREE.HemisphereLight(0xcce0ff, 0x3d352e, 0.4);
+        const hemiLight = new THREE.HemisphereLight(0xcce0ff, 0x3d352e, 0.45);
         scene.add(hemiLight);
 
-        const sunLight = new THREE.DirectionalLight(0xfff8eb, 2.2);
+        const sunLight = new THREE.DirectionalLight(0xfff8eb, 1.65);
         sunLight.position.set(16, 28, 14);
         sunLight.castShadow = true;
-
         sunLight.shadow.mapSize.width = 2048;
         sunLight.shadow.mapSize.height = 2048;
         sunLight.shadow.camera.near = 0.5;
-        sunLight.shadow.camera.far = 70;
-        
-        const shadowExtent = 14;
+        sunLight.shadow.camera.far = 90;
+        const shadowExtent = 18;
         sunLight.shadow.camera.left = -shadowExtent;
         sunLight.shadow.camera.right = shadowExtent;
         sunLight.shadow.camera.top = shadowExtent;
         sunLight.shadow.camera.bottom = -shadowExtent;
-        
-        sunLight.shadow.bias = -0.0001;
-        sunLight.shadow.normalBias = 0.04;
-        sunLight.shadow.radius = 3;
+        sunLight.shadow.bias = -0.00025;
+        sunLight.shadow.normalBias = 0.035;
+        sunLight.shadow.radius = 2.5;
         scene.add(sunLight);
 
-        // --- 3. Optimized Texture Generator Helper ---
+        const moonLight = new THREE.DirectionalLight(0x9fb6ff, 0.0);
+        moonLight.castShadow = false;
+        scene.add(moonLight);
+        scene.add(moonLight.target);
+        scene.add(sunLight.target);
+
+        // ============================================================
+        // 4. DAY / NIGHT CYCLE STATE
+        // ============================================================
+        const dayCycleDuration = 120;
+        let timeOfDay = 0.25;
+        const sunOrbitTilt = 0.35;
+
+        const skyDayColor   = new THREE.Color(0x8fc4f0);
+        const skyDuskColor  = new THREE.Color(0xd9763c);
+        const skyNightColor = new THREE.Color(0x05070f);
+        const sunDayColor   = new THREE.Color(0xfff8eb);
+        const sunDuskColor  = new THREE.Color(0xff8a3d);
+        const moonColor     = new THREE.Color(0x9fb6ff);
+
+        const skyColor = new THREE.Color();
+        const sunDir = new THREE.Vector3();
+        const moonDir = new THREE.Vector3();
+        const tmpColor = new THREE.Color();
+
+        let godRayDaylight = 0;
+        let godRayHorizonH = 0;
+        let elapsedTime = 0;
+
+        // ============================================================
+        // 5. SKY DOME + SUN/MOON + STARS
+        // ============================================================
+        function createGlowTexture() {
+            const c = document.createElement('canvas');
+            c.width = c.height = 128;
+            const ctx = c.getContext('2d');
+            const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+            g.addColorStop(0.00, 'rgba(255,255,255,1)');
+            g.addColorStop(0.10, 'rgba(255,255,255,0.9)');
+            g.addColorStop(0.22, 'rgba(255,255,255,0.42)');
+            g.addColorStop(0.50, 'rgba(255,255,255,0.08)');
+            g.addColorStop(1.00, 'rgba(255,255,255,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, 128, 128);
+            return new THREE.CanvasTexture(c);
+        }
+        const glowTexture = createGlowTexture();
+
+        const sunSpriteMat = new THREE.SpriteMaterial({
+            map: glowTexture,
+            color: new THREE.Color(1.0, 0.9, 0.72),
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+        });
+        const sunBody = new THREE.Sprite(sunSpriteMat);
+        sunBody.scale.set(36, 36, 1);
+        scene.add(sunBody);
+
+        const moonSpriteMat = new THREE.SpriteMaterial({
+            map: glowTexture, color: 0xdfe8ff,
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+        });
+        const moonBody = new THREE.Sprite(moonSpriteMat);
+        moonBody.scale.set(22, 22, 1);
+        scene.add(moonBody);
+
+        function createStarTexture() {
+            const c = document.createElement('canvas');
+            c.width = c.height = 32;
+            const ctx = c.getContext('2d');
+            const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            g.addColorStop(0.0, 'rgba(255,255,255,1)');
+            g.addColorStop(0.35, 'rgba(255,255,255,0.6)');
+            g.addColorStop(1.0, 'rgba(255,255,255,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, 32, 32);
+            return new THREE.CanvasTexture(c);
+        }
+
+        const STAR_COUNT = 700;
+        const starPositions = new Float32Array(STAR_COUNT * 3);
+        for (let i = 0; i < STAR_COUNT; i++) {
+            const u = Math.random() * 2 - 1;
+            const theta = Math.random() * Math.PI * 2;
+            const r = Math.sqrt(1 - u * u);
+            const radius = 355 + Math.random() * 25;
+            starPositions[i*3]   = Math.cos(theta) * r * radius;
+            starPositions[i*3+1] = u * radius;
+            starPositions[i*3+2] = Math.sin(theta) * r * radius;
+        }
+        const starGeo = new THREE.BufferGeometry();
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        const starMat = new THREE.PointsMaterial({
+            map: createStarTexture(), size: 3.0, sizeAttenuation: false,
+            transparent: true, opacity: 0, depthWrite: false,
+            blending: THREE.AdditiveBlending, color: 0xffffff, fog: false
+        });
+        const starGroup = new THREE.Points(starGeo, starMat);
+        starGroup.frustumCulled = false;
+        scene.add(starGroup);
+
+        const celestialAxis = new THREE.Vector3(0, -Math.sin(sunOrbitTilt), Math.cos(sunOrbitTilt)).normalize();
+
+        const skyUniforms = {
+            topColor:    { value: new THREE.Color(0x2a6fd0) },
+            bottomColor: { value: new THREE.Color(0x8fc4f0) },
+            sunDir:      { value: new THREE.Vector3(0, 1, 0) },
+            sunColor:    { value: new THREE.Color(0xfff8eb) },
+            sunGlow:     { value: 0.55 }
+        };
+
+        const skyDome = new THREE.Mesh(
+            new THREE.SphereGeometry(400, 32, 24),
+            new THREE.ShaderMaterial({
+                uniforms: skyUniforms,
+                vertexShader: `
+                    varying vec3 vDir;
+                    void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+                `,
+                fragmentShader: `
+                    uniform vec3 topColor, bottomColor, sunDir, sunColor;
+                    uniform float sunGlow;
+                    varying vec3 vDir;
+                    void main() {
+                        vec3 dir = normalize(vDir);
+                        float h = dir.y;
+                        vec3 col = mix(bottomColor, topColor, pow(clamp(h, 0.0, 1.0), 0.62));
+                        col = mix(col, bottomColor * 0.45, clamp(-h * 2.0, 0.0, 1.0));
+                        float d = max(dot(dir, sunDir), 0.0);
+                        col += sunColor * (pow(d, 4.0) * 0.14 + pow(d, 24.0) * 0.48) * sunGlow;
+                        float haze = pow(1.0 - clamp(abs(h), 0.0, 1.0), 8.0);
+                        col = mix(col, bottomColor, haze * 0.45);
+                        gl_FragColor = vec4(col, 1.0);
+                    }
+                `,
+                side: THREE.BackSide, depthWrite: false, fog: false
+            })
+        );
+        skyDome.renderOrder = -1000;
+        skyDome.frustumCulled = false;
+        scene.add(skyDome);
+
+        // ============================================================
+        // 6. CLOUDS — multi-layered planes with baked puffy shading
+        // ============================================================
+        const CLOUD_TEX_SIZE = 256;
+
+        function hash2(x, y, s) {
+            const v = Math.sin(x * 12.9898 + y * 78.233 + s * 37.719) * 43758.5453;
+            return v - Math.floor(v);
+        }
+
+        function tileNoise(x, y, period, seed) {
+            const x0 = Math.floor(x), y0 = Math.floor(y);
+            const x1 = x0 + 1, y1 = y0 + 1;
+            const fx = x - x0, fy = y - y0;
+            const sx = fx * fx * (3 - 2 * fx);
+            const sy = fy * fy * (3 - 2 * fy);
+            const xi0 = ((x0 % period) + period) % period;
+            const yi0 = ((y0 % period) + period) % period;
+            const xi1 = ((x1 % period) + period) % period;
+            const yi1 = ((y1 % period) + period) % period;
+            const a = hash2(xi0, yi0, seed);
+            const b = hash2(xi1, yi0, seed);
+            const c = hash2(xi0, yi1, seed);
+            const d = hash2(xi1, yi1, seed);
+            return a * (1-sx)*(1-sy) + b * sx*(1-sy) + c * (1-sx)*sy + d * sx*sy;
+        }
+
+        // Cloud texture with baked-in puffiness so the alpha alone reads as 3D
+        function createCloudTexture(size, coverage, softness, seed) {
+            const height = new Float32Array(size * size);
+            const octaves = [
+                { cells: 4,  amp: 0.50 },
+                { cells: 8,  amp: 0.25 },
+                { cells: 16, amp: 0.125 },
+                { cells: 32, amp: 0.0625 },
+                { cells: 64, amp: 0.03125 }
+            ];
+
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    const u = x / size, v = y / size;
+                    let n = 0;
+                    for (const oct of octaves) {
+                        n += oct.amp * tileNoise(u * oct.cells, v * oct.cells, oct.cells, seed);
+                    }
+                    height[y * size + x] = n;
+                }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const img = ctx.createImageData(size, size);
+            const data = img.data;
+
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    const idx = y * size + x;
+                    const h = height[idx];
+
+                    let a = (h - coverage) / softness;
+                    a = Math.max(0, Math.min(1, a));
+                    a = a * a * (3 - 2 * a);
+
+                    if (a < 0.012) {
+                        data[idx*4+3] = 0;
+                        continue;
+                    }
+
+                    // Baked puffy shading from the local height gradient
+                    const xn = (x + size - 1) % size;
+                    const yn = (y + size - 1) % size;
+                    const xp = (x + 1) % size;
+                    const yp = (y + 1) % size;
+                    const gx = height[y*size + xp] - height[y*size + xn];
+                    const gy = height[yp*size + x] - height[yn*size + x];
+
+                    // Fake light from upper-left of texture
+                    const lit = 0.62 + (gx * 1.8 + gy * 1.8);
+                    const brightness = Math.max(0.40, Math.min(1.0, lit));
+
+                    // Backlit thin edges: brighten where alpha is thin
+                    const backlit = Math.pow(1 - a, 1.6) * 0.42;
+                    const finalBright = Math.min(1.0, brightness + backlit);
+
+                    // Cloud colors: cool-white highlights, grey-blue shadows
+                    const r = Math.floor(148 + 107 * finalBright);
+                    const g = Math.floor(160 + 95 * finalBright);
+                    const b = Math.floor(180 + 75 * finalBright);
+
+                    data[idx*4+0] = r;
+                    data[idx*4+1] = g;
+                    data[idx*4+2] = b;
+                    data[idx*4+3] = Math.floor(a * 255);
+                }
+            }
+
+            ctx.putImageData(img, 0, 0);
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+            return tex;
+        }
+
+        const cloudGroup = new THREE.Group();
+        cloudGroup.frustumCulled = false;
+        scene.add(cloudGroup);
+
+        // 3 stacked layers at different altitudes → parallax reads as volume
+        const cloudLayers = [];
+        const cloudConfigs = [
+            { y: 112, planeSize: 2000, repeat: 1.6, opacity: 0.48, coverage: 0.54, softness: 0.26, windX: 0.0035, windY: 0.0018, seed: 1.7 },
+            { y:  90, planeSize: 1800, repeat: 2.6, opacity: 0.62, coverage: 0.50, softness: 0.22, windX: 0.0072, windY: 0.0036, seed: 4.3 },
+            { y:  70, planeSize: 1600, repeat: 4.0, opacity: 0.55, coverage: 0.44, softness: 0.22, windX: 0.0130, windY: 0.0060, seed: 8.1 }
+        ];
+
+        for (const cfg of cloudConfigs) {
+            const tex = createCloudTexture(CLOUD_TEX_SIZE, cfg.coverage, cfg.softness, cfg.seed);
+            tex.repeat.set(cfg.repeat, cfg.repeat);
+            const mat = new THREE.MeshBasicMaterial({
+                map: tex, transparent: true, depthWrite: false,
+                opacity: cfg.opacity, fog: false, color: 0xffffff, side: THREE.DoubleSide
+            });
+            const plane = new THREE.Mesh(new THREE.PlaneGeometry(cfg.planeSize, cfg.planeSize), mat);
+            plane.rotation.x = -Math.PI / 2;
+            plane.position.y = cfg.y;
+            plane.renderOrder = -500 + cloudLayers.length;
+            plane.frustumCulled = false;
+            cloudGroup.add(plane);
+            cloudLayers.push({ mesh: plane, mat, tex, cfg });
+        }
+
+        // Desaturated tint palette (no more brown clouds)
+        const cloudDayTint   = new THREE.Color(0xf6f7fa);
+        const cloudDuskTint  = new THREE.Color(0xe6cdb6);
+        const cloudNightTint = new THREE.Color(0x35404f);
+        const cloudTint = new THREE.Color();
+
+        // ============================================================
+        // 7. BLOCK TEXTURES — 16x16 pixel-art, fully randomized per block (except wood)
+        // ============================================================
+        const TEX_VARIANTS = 12; // distinct pixel patterns per type
+
         function createCanvasTexture(drawFn) {
             const canvas = document.createElement('canvas');
             canvas.width = 16;
@@ -111,22 +490,58 @@
             const ctx = canvas.getContext('2d');
             drawFn(ctx, 16);
             const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
             texture.magFilter = THREE.NearestFilter;
             texture.minFilter = THREE.NearestFilter;
             return texture;
         }
 
-        const grassTexture = createCanvasTexture((ctx, size) => {
-            const shades = ['#4a7c28', '#588c30', '#3b661d', '#619c36', '#437024', '#345719'];
-            for (let x = 0; x < size; x++) {
-                for (let y = 0; y < size; y++) {
-                    const noise = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
-                    ctx.fillStyle = shades[Math.floor(noise * shades.length)];
-                    ctx.fillRect(x, y, 1, 1);
-                }
-            }
-        });
+        function hashNoise(x, y, seed) {
+            return Math.abs(Math.sin(x * 12.9898 + y * 78.233 + seed * 37.719) * 43758.5453) % 1;
+        }
 
+        function makeShadedTexture(shades, seed) {
+            return createCanvasTexture((ctx, size) => {
+                for (let x = 0; x < size; x++) {
+                    for (let y = 0; y < size; y++) {
+                        const noise = hashNoise(x, y, seed);
+                        ctx.fillStyle = shades[Math.floor(noise * shades.length)];
+                        ctx.fillRect(x, y, 1, 1);
+                    }
+                }
+            });
+        }
+
+        const grassShades    = ['#4a7c28', '#588c30', '#3b661d', '#619c36', '#437024', '#345719'];
+        const stoneShades    = ['#5a5a5a', '#686868', '#4f4f4f', '#757575', '#3f3f3f', '#808080'];
+        const dirtShades     = ['#6b4423', '#7a5130', '#5c3a1c', '#8b5e3c', '#4e3118', '#9a6b45'];
+        const bedrockShades  = ['#1a1a1a', '#2a2a2a', '#0f0f0f', '#333333', '#222222', '#3d3d3d', '#151515', '#282828'];
+
+        // Fully randomized pixel patterns for grass / dirt / stone / bedrock
+        const grassMaterials    = [];
+        const dirtMaterials     = [];
+        const stoneMaterials    = [];
+        const bedrockMaterials  = [];
+        for (let v = 0; v < TEX_VARIANTS; v++) {
+            grassMaterials.push(new THREE.MeshStandardMaterial({
+                map: makeShadedTexture(grassShades, 11.7 + v * 91.3),
+                roughness: 0.95, metalness: 0.0
+            }));
+            dirtMaterials.push(new THREE.MeshStandardMaterial({
+                map: makeShadedTexture(dirtShades, 53.1 + v * 67.9),
+                roughness: 1.0, metalness: 0.0
+            }));
+            stoneMaterials.push(new THREE.MeshStandardMaterial({
+                map: makeShadedTexture(stoneShades, 31.4 + v * 44.2),
+                roughness: 0.95, metalness: 0.0
+            }));
+            bedrockMaterials.push(new THREE.MeshStandardMaterial({
+                map: makeShadedTexture(bedrockShades, 77.2 + v * 53.8),
+                roughness: 0.98, metalness: 0.0
+            }));
+        }
+
+        // Wood/planks — fixed pattern, never randomized
         const woodTexture = createCanvasTexture((ctx, size) => {
             const highlight  = '#c2975d';
             const baseLight  = '#b0834c';
@@ -134,14 +549,12 @@
             const baseDark   = '#885e2f';
             const shadow     = '#6e4820';
             const darkBorder = '#4d3013';
-
             for (let y = 0; y < size; y++) {
                 const plankIndex = Math.floor(y / 4);
                 const rowInPlank = y % 4;
                 for (let x = 0; x < size; x++) {
                     const isVerticalSeam = (plankIndex % 2 === 0) ? (x === 7) : (x === 15);
                     const isNearSeam     = (plankIndex % 2 === 0) ? (x === 6 || x === 8) : (x === 14 || x === 0);
-
                     let pixelColor;
                     if (rowInPlank === 3 || isVerticalSeam) {
                         pixelColor = darkBorder;
@@ -160,100 +573,193 @@
                 }
             }
         });
+        const woodMaterial = new THREE.MeshStandardMaterial({ map: woodTexture, roughness: 0.88, metalness: 0.0 });
 
-        const stoneTexture = createCanvasTexture((ctx, size) => {
-            const shades = ['#5a5a5a', '#686868', '#4f4f4f', '#757575', '#3f3f3f', '#808080'];
-            for (let x = 0; x < size; x++) {
-                for (let y = 0; y < size; y++) {
-                    const noise = Math.abs(Math.sin(x * 23.7 + y * 67.3) * 43758.5453) % 1;
-                    ctx.fillStyle = shades[Math.floor(noise * shades.length)];
-                    ctx.fillRect(x, y, 1, 1);
+        function variantIndex(x, y, z) {
+            const h = (Math.round(x) * 73856093) ^ (Math.round(y) * 19349663) ^ (Math.round(z) * 83492791);
+            return ((h >>> 0) % TEX_VARIANTS);
+        }
+
+        // ============================================================
+        // 8. VOXEL WORLD — face culling + merged geometry (optimized)
+        // ============================================================
+        // Packed integer keys: (x+512)<<20 | (y+512)<<10 | (z+512)  — avoids string alloc
+        const solidVoxels = new Set();
+        let worldMeshes = [];
+        let meshDirty = false;
+
+        function packKey(x, y, z) {
+            return ((x + 512) << 20) | ((y + 512) << 10) | (z + 512);
+        }
+        function unpackX(k) { return (k >>> 20) - 512; }
+        function unpackY(k) { return ((k >>> 10) & 1023) - 512; }
+        function unpackZ(k) { return (k & 1023) - 512; }
+
+        function addVoxel(x, y, z) {
+            const rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
+            const key = packKey(rx, ry, rz);
+            if (solidVoxels.has(key)) return;
+            solidVoxels.add(key);
+            meshDirty = true;
+        }
+        function removeVoxel(x, y, z) {
+            const key = packKey(Math.round(x), Math.round(y), Math.round(z));
+            if (solidVoxels.has(key)) {
+                solidVoxels.delete(key);
+                meshDirty = true;
+            }
+        }
+
+        // Flat face data for fast access (no nested array lookups)
+        const faceVertData = new Float32Array([
+            // +Z
+            -0.5,-0.5, 0.5,  0.5,-0.5, 0.5,  0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
+            // -Z
+             0.5,-0.5,-0.5, -0.5,-0.5,-0.5, -0.5, 0.5,-0.5,  0.5, 0.5,-0.5,
+            // -X
+            -0.5,-0.5,-0.5, -0.5,-0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5,-0.5,
+            // +X
+             0.5,-0.5, 0.5,  0.5,-0.5,-0.5,  0.5, 0.5,-0.5,  0.5, 0.5, 0.5,
+            // +Y
+            -0.5, 0.5, 0.5,  0.5, 0.5, 0.5,  0.5, 0.5,-0.5, -0.5, 0.5,-0.5,
+            // -Y
+            -0.5,-0.5,-0.5,  0.5,-0.5,-0.5,  0.5,-0.5, 0.5, -0.5,-0.5, 0.5
+        ]);
+        const faceNormData = new Float32Array([
+            0,0,1,  0,0,-1,  -1,0,0,  1,0,0,  0,1,0,  0,-1,0
+        ]);
+        const faceUVData = new Float32Array([0,0, 1,0, 1,1, 0,1]);
+        const neighborOffsets = [0,0,1,  0,0,-1,  -1,0,0,  1,0,0,  0,1,0,  0,-1,0];
+
+        function addFace(matData, x, y, z, faceIndex) {
+            const baseIndex = matData.positions.length / 3;
+            const vo = faceIndex * 12;
+            const no = faceIndex * 3;
+            const nx = faceNormData[no], ny = faceNormData[no+1], nz = faceNormData[no+2];
+            const pos = matData.positions, nor = matData.normals, uvs = matData.uvs;
+            for (let i = 0; i < 4; i++) {
+                const vi = vo + i * 3;
+                pos.push(x + faceVertData[vi], y + faceVertData[vi+1], z + faceVertData[vi+2]);
+                nor.push(nx, ny, nz);
+                uvs.push(faceUVData[i*2], faceUVData[i*2+1]);
+            }
+            const idx = matData.indices;
+            idx.push(baseIndex, baseIndex+1, baseIndex+2, baseIndex, baseIndex+2, baseIndex+3);
+        }
+
+        function blockTypeAt(y) {
+            if (y > 0) return 'wood';
+            if (y === 0) return 'grass';
+            if (y >= -2) return 'dirt';
+            if (y <= -11) return 'bedrock';
+            return 'stone';
+        }
+
+        // Pre-resolved material lookup tables (avoid string compares in hot loop)
+        const typeMats = {
+            wood: [woodMaterial],
+            grass: grassMaterials,
+            dirt: dirtMaterials,
+            stone: stoneMaterials,
+            bedrock: bedrockMaterials
+        };
+
+        function buildWorldMesh() {
+            // Dispose old geometries
+            for (let i = 0; i < worldMeshes.length; i++) {
+                scene.remove(worldMeshes[i]);
+                worldMeshes[i].geometry.dispose();
+            }
+            worldMeshes.length = 0;
+
+            const mats = {};
+            function getBucket(type, vi) {
+                const key = type === 'wood' ? 0 : (type.charCodeAt(0) << 4) | vi; // fast numeric key
+                let b = mats[key];
+                if (!b) {
+                    const arr = typeMats[type];
+                    b = mats[key] = {
+                        positions: [], normals: [], uvs: [], indices: [],
+                        material: arr[type === 'wood' ? 0 : vi]
+                    };
                 }
+                return b;
             }
-        });
 
-        const grassMaterial = new THREE.MeshStandardMaterial({ map: grassTexture, roughness: 0.95, metalness: 0.0 });
-        const woodMaterial  = new THREE.MeshStandardMaterial({ map: woodTexture, roughness: 0.88, metalness: 0.0 });
-        const stoneMaterial = new THREE.MeshStandardMaterial({ map: stoneTexture, roughness: 0.95, metalness: 0.0 });
+            for (const key of solidVoxels) {
+                const x = unpackX(key), y = unpackY(key), z = unpackZ(key);
+                const type = blockTypeAt(y);
+                const vi = type === 'wood' ? 0 : variantIndex(x, y, z);
+                const matData = getBucket(type, vi);
 
-        const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
-        const nodeMatrix = new Map();
-        const activeMeshes = [];
-
-        function getNodeKey(x, y, z) {
-            return `${x},${y},${z}`;
-        }
-
-        function renderVoxelMesh(x, y, z) {
-            const rx = Math.round(x);
-            const ry = Math.round(y);
-            const rz = Math.round(z);
-            const key = getNodeKey(rx, ry, rz);
-            if (nodeMatrix.has(key)) return;
-
-            const mat = (ry > 0) ? woodMaterial : (ry === 0) ? grassMaterial : stoneMaterial;
-
-            const mesh = new THREE.Mesh(cubeGeometry, mat);
-            mesh.position.set(rx, ry, rz);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            scene.add(mesh);
-
-            nodeMatrix.set(key, mesh);
-            activeMeshes.push(mesh);
-            return mesh;
-        }
-
-        function disposeVoxelMesh(x, y, z) {
-            const rx = Math.round(x);
-            const ry = Math.round(y);
-            const rz = Math.round(z);
-            const key = getNodeKey(rx, ry, rz);
-            if (nodeMatrix.has(key)) {
-                const mesh = nodeMatrix.get(key);
-                scene.remove(mesh);
-                nodeMatrix.delete(key);
-                const idx = activeMeshes.indexOf(mesh);
-                if (idx !== -1) activeMeshes.splice(idx, 1);
+                // Face culling via packed neighbor keys
+                if (!solidVoxels.has(packKey(x, y, z+1))) addFace(matData, x, y, z, 0);
+                if (!solidVoxels.has(packKey(x, y, z-1))) addFace(matData, x, y, z, 1);
+                if (!solidVoxels.has(packKey(x-1, y, z))) addFace(matData, x, y, z, 2);
+                if (!solidVoxels.has(packKey(x+1, y, z))) addFace(matData, x, y, z, 3);
+                if (!solidVoxels.has(packKey(x, y+1, z))) addFace(matData, x, y, z, 4);
+                if (!solidVoxels.has(packKey(x, y-1, z))) addFace(matData, x, y, z, 5);
             }
+
+            for (const key in mats) {
+                const d = mats[key];
+                const pLen = d.positions.length;
+                if (pLen === 0) continue;
+                const geom = new THREE.BufferGeometry();
+                geom.setAttribute('position', new THREE.Float32BufferAttribute(d.positions, 3));
+                geom.setAttribute('normal', new THREE.Float32BufferAttribute(d.normals, 3));
+                geom.setAttribute('uv', new THREE.Float32BufferAttribute(d.uvs, 2));
+                geom.setIndex(d.indices);
+                const mesh = new THREE.Mesh(geom, d.material);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                mesh.frustumCulled = true;
+                scene.add(mesh);
+                worldMeshes.push(mesh);
+            }
+            meshDirty = false;
         }
 
-        // --- 4. Populate World Grid ---
-        for (let x = -6; x <= 5; x++) {
-            for (let z = -6; z <= 5; z++) {
+        // ---- Populate world (32x32 grid, 12 layers deep) ----
+        for (let x = -16; x <= 15; x++) {
+            for (let z = -16; z <= 15; z++) {
                 for (let y = -11; y <= 0; y++) {
-                    renderVoxelMesh(x, y, z);
+                    solidVoxels.add(packKey(x, y, z));
                 }
             }
         }
+        buildWorldMesh();
 
-        // --- 5. Camera & Control System ---
-        const eyeOffset = 1.6;
-        const playerHeight = 1.8;
+        // ============================================================
+        // 9. CAMERA CONTROLS (pointer lock + sprint + crouch)
+        // ============================================================
+        let eyeOffset = 1.6;
+        let playerHeight = 1.8;
         const playerRadius = 0.3;
+        const standEyeOffset = 1.6;
+        const crouchEyeOffset = 1.05;
+        const standPlayerHeight = 1.8;
+        const crouchPlayerHeight = 1.25;
         camera.position.set(0, 2.1, 4);
 
-        let yaw = 0;
-        let pitch = 0;
+        let yaw = 0, pitch = 0;
 
-        renderer.domElement.addEventListener('click', () => {
-            renderer.domElement.requestPointerLock();
-        });
+        renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock());
 
         document.addEventListener('mousemove', (e) => {
             if (document.pointerLockElement === renderer.domElement) {
-                const sensitivity = 0.002;
-                yaw -= e.movementX * sensitivity;
-                pitch -= e.movementY * sensitivity;
-
+                const s = 0.002;
+                yaw -= e.movementX * s;
+                pitch -= e.movementY * s;
                 const maxPitch = Math.PI / 2 - 0.01;
                 pitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
-
                 camera.rotation.set(pitch, yaw, 0, 'YXZ');
             }
         });
 
-        // --- 6. Raycast Interaction (Optimized Ray Intersect Array) ---
+        // ============================================================
+        // 10. RAYCAST INTERACTION
+        // ============================================================
         const raycaster = new THREE.Raycaster();
         const centerScreen = new THREE.Vector2(0, 0);
 
@@ -261,37 +767,37 @@
             if (document.pointerLockElement !== renderer.domElement) return;
 
             raycaster.setFromCamera(centerScreen, camera);
-            const intersects = raycaster.intersectObjects(activeMeshes);
+            const hits = raycaster.intersectObjects(worldMeshes);
 
-            if (intersects.length > 0) {
-                const hit = intersects[0];
-                const hitPos = hit.object.position;
+            if (hits.length > 0) {
+                const hit = hits[0];
+                const p = hit.point;
+                const n = hit.face.normal;
+                const bx = Math.round(p.x - n.x * 0.5);
+                const by = Math.round(p.y - n.y * 0.5);
+                const bz = Math.round(p.z - n.z * 0.5);
 
                 if (e.button === 0) {
-                    disposeVoxelMesh(hitPos.x, hitPos.y, hitPos.z);
+                    removeVoxel(bx, by, bz);
                 } else if (e.button === 2) {
-                    const norm = hit.face.normal;
-                    const targetX = Math.round(hitPos.x + norm.x);
-                    const targetY = Math.round(hitPos.y + norm.y);
-                    const targetZ = Math.round(hitPos.z + norm.z);
-
+                    const tx = bx + n.x, ty = by + n.y, tz = bz + n.z;
                     const pBox = getEntityBounds(camera.position);
                     const bBox = {
-                        minX: targetX - 0.5, maxX: targetX + 0.5,
-                        minY: targetY - 0.5, maxY: targetY + 0.5,
-                        minZ: targetZ - 0.5, maxZ: targetZ + 0.5
+                        minX: tx - 0.5, maxX: tx + 0.5,
+                        minY: ty - 0.5, maxY: ty + 0.5,
+                        minZ: tz - 0.5, maxZ: tz + 0.5
                     };
-
                     if (!evaluateBoundsOverlap(pBox, bBox)) {
-                        renderVoxelMesh(targetX, targetY, targetZ);
+                        addVoxel(tx, ty, tz);
                     }
                 }
             }
         });
-
         window.addEventListener('contextmenu', e => e.preventDefault());
 
-        // --- 7. Optimized Physics & Collision System ---
+        // ============================================================
+        // 11. PHYSICS & COLLISION
+        // ============================================================
         const keyMap = {};
         window.addEventListener('keydown', (e) => { keyMap[e.code] = true; });
         window.addEventListener('keyup', (e) => { keyMap[e.code] = false; });
@@ -303,12 +809,9 @@
 
         function getEntityBounds(pos) {
             return {
-                minX: pos.x - playerRadius,
-                maxX: pos.x + playerRadius,
-                minY: pos.y - eyeOffset,
-                maxY: pos.y - eyeOffset + playerHeight,
-                minZ: pos.z - playerRadius,
-                maxZ: pos.z + playerRadius
+                minX: pos.x - playerRadius, maxX: pos.x + playerRadius,
+                minY: pos.y - eyeOffset,    maxY: pos.y - eyeOffset + playerHeight,
+                minZ: pos.z - playerRadius, maxZ: pos.z + playerRadius
             };
         }
 
@@ -326,52 +829,52 @@
             const maxY = Math.floor(aabb.maxY + 0.5);
             const minZ = Math.floor(aabb.minZ + 0.5);
             const maxZ = Math.floor(aabb.maxZ + 0.5);
-
-            const collisions = [];
-            for (let x = minX; x <= maxX; x++) {
-                for (let y = minY; y <= maxY; y++) {
-                    for (let z = minZ; z <= maxZ; z++) {
-                        if (nodeMatrix.has(getNodeKey(x, y, z))) {
-                            collisions.push({
-                                minX: x - 0.5, maxX: x + 0.5,
-                                minY: y - 0.5, maxY: y + 0.5,
-                                minZ: z - 0.5, maxZ: z + 0.5
+            const out = [];
+            for (let x = minX; x <= maxX; x++)
+                for (let y = minY; y <= maxY; y++)
+                    for (let z = minZ; z <= maxZ; z++)
+                        if (solidVoxels.has(packKey(x, y, z)))
+                            out.push({
+                                minX: x-0.5, maxX: x+0.5,
+                                minY: y-0.5, maxY: y+0.5,
+                                minZ: z-0.5, maxZ: z+0.5
                             });
-                        }
-                    }
-                }
-            }
-            return collisions;
+            return out;
         }
 
         function computeKinematics() {
-            const moveSpeed = 0.07;
+            const crouching = keyMap['KeyC'] || keyMap['ControlLeft'];
+            const sprinting = !crouching && (keyMap['ShiftLeft'] || keyMap['ShiftRight']);
+
+            // Update height for crouch (smooth enough by direct assign)
+            eyeOffset = crouching ? crouchEyeOffset : standEyeOffset;
+            playerHeight = crouching ? crouchPlayerHeight : standPlayerHeight;
+
+            const moveSpeed = 0.07 * (crouching ? 0.45 : (sprinting ? 1.85 : 1.0));
+
             const forwardX = -Math.sin(yaw);
             const forwardZ = -Math.cos(yaw);
             const rightX = Math.cos(yaw);
             const rightZ = -Math.sin(yaw);
 
-            let dx = 0;
-            let dz = 0;
+            let dx = 0, dz = 0;
+            if (keyMap['KeyW'] || keyMap['ArrowUp'])    { dx += forwardX * moveSpeed; dz += forwardZ * moveSpeed; }
+            if (keyMap['KeyS'] || keyMap['ArrowDown'])  { dx -= forwardX * moveSpeed; dz -= forwardZ * moveSpeed; }
+            if (keyMap['KeyA'] || keyMap['ArrowLeft'])  { dx -= rightX * moveSpeed;   dz -= rightZ * moveSpeed; }
+            if (keyMap['KeyD'] || keyMap['ArrowRight']) { dx += rightX * moveSpeed;   dz += rightZ * moveSpeed; }
 
-            if (keyMap['KeyW'] || keyMap['ArrowUp']) { dx += forwardX * moveSpeed; dz += forwardZ * moveSpeed; }
-            if (keyMap['KeyS'] || keyMap['ArrowDown']) { dx -= forwardX * moveSpeed; dz -= forwardZ * moveSpeed; }
-            if (keyMap['KeyA'] || keyMap['ArrowLeft']) { dx -= rightX * moveSpeed; dz -= rightZ * moveSpeed; }
-            if (keyMap['KeyD'] || keyMap['ArrowRight']) { dx += rightX * moveSpeed; dz += rightZ * moveSpeed; }
-
-            if (keyMap['Space'] && isOnGround) {
+            if (keyMap['Space'] && isOnGround && !crouching) {
                 verticalVelocity = impulseMagnitude;
                 isOnGround = false;
             }
 
-            // Resolve Vertical Movement (Y-axis)
+            // Vertical
             verticalVelocity -= downwardForce;
             camera.position.y += verticalVelocity;
             let pBox = getEntityBounds(camera.position);
             let nodes = checkVoxelCollisions(pBox);
-
             isOnGround = false;
-            for (let b of nodes) {
+            for (const b of nodes) {
                 if (evaluateBoundsOverlap(pBox, b)) {
                     if (verticalVelocity < 0) {
                         camera.position.y = b.maxY + eyeOffset;
@@ -385,11 +888,11 @@
                 }
             }
 
-            // Resolve Horizontal Movement (X-axis)
+            // X
             camera.position.x += dx;
             pBox = getEntityBounds(camera.position);
             nodes = checkVoxelCollisions(pBox);
-            for (let b of nodes) {
+            for (const b of nodes) {
                 if (evaluateBoundsOverlap(pBox, b)) {
                     if (dx > 0) camera.position.x = b.minX - playerRadius;
                     else if (dx < 0) camera.position.x = b.maxX + playerRadius;
@@ -397,11 +900,11 @@
                 }
             }
 
-            // Resolve Depth Movement (Z-axis)
+            // Z
             camera.position.z += dz;
             pBox = getEntityBounds(camera.position);
             nodes = checkVoxelCollisions(pBox);
-            for (let b of nodes) {
+            for (const b of nodes) {
                 if (evaluateBoundsOverlap(pBox, b)) {
                     if (dz > 0) camera.position.z = b.minZ - playerRadius;
                     else if (dz < 0) camera.position.z = b.maxZ + playerRadius;
@@ -409,39 +912,193 @@
                 }
             }
 
-            // Fall Boundary Reset
             if (camera.position.y < -35) {
                 camera.position.set(0, 2.1, 0);
                 verticalVelocity = 0;
             }
         }
 
-        // --- 8. Event Handling & Main Loop ---
+        // ============================================================
+        // 12. DAY / NIGHT + ATMOSPHERE UPDATE
+        // ============================================================
+        const skyTopDayColor   = new THREE.Color(0x2a6fd0);
+        const skyTopDuskColor  = new THREE.Color(0x1b2a5c);
+        const skyTopNightColor = new THREE.Color(0x01030a);
+
+        const camToSun = new THREE.Vector3();
+        const camForward = new THREE.Vector3();
+        const sunProjNDC = new THREE.Vector3();
+
+        function blendSky(out, night, dusk, day, h) {
+            if (h >= 0.16) { out.copy(day); }
+            else if (h > -0.16) {
+                const t = (h + 0.16) / 0.32;
+                if (t < 0.5) out.copy(night).lerp(dusk, t * 2);
+                else         out.copy(dusk).lerp(day, (t - 0.5) * 2);
+            } else { out.copy(night); }
+        }
+
+        function updateDayNightCycle(delta) {
+            timeOfDay = (timeOfDay + delta / dayCycleDuration) % 1;
+            elapsedTime += delta;
+
+            const angle = timeOfDay * Math.PI * 2;
+            sunDir.set(
+                Math.cos(angle),
+                Math.sin(angle) * Math.cos(sunOrbitTilt),
+                Math.sin(angle) * Math.sin(sunOrbitTilt)
+            ).normalize();
+            moonDir.copy(sunDir).negate();
+
+            const h = sunDir.y;
+            const daylight = THREE.MathUtils.smoothstep(h, -0.12, 0.28);
+
+            if (h >= 0.16) skyColor.copy(skyDayColor);
+            else if (h > -0.16) {
+                const t = (h + 0.16) / 0.32;
+                if (t < 0.5) skyColor.copy(skyNightColor).lerp(skyDuskColor, t * 2);
+                else         skyColor.copy(skyDuskColor).lerp(skyDayColor, (t - 0.5) * 2);
+            } else skyColor.copy(skyNightColor);
+
+            scene.background.copy(skyColor);
+            scene.fog.color.copy(skyColor);
+
+            sunLight.intensity = 1.65 * daylight;
+            sunLight.color.copy(sunDuskColor).lerp(sunDayColor, THREE.MathUtils.clamp((h - 0.05) / 0.30, 0, 1));
+            moonLight.intensity = 0.42 * (1 - daylight);
+            moonLight.color.copy(moonColor);
+
+            // Stronger fill so pixel textures stay readable in shade / night
+            ambientLight.intensity = 0.28 + 0.28 * daylight;
+            hemiLight.intensity    = 0.20 + 0.28 * daylight;
+
+            const lightDistance = 60;
+            sunLight.position.copy(camera.position).addScaledVector(sunDir, lightDistance);
+            sunLight.target.position.copy(camera.position);
+            sunLight.target.updateMatrixWorld();
+
+            moonLight.position.copy(camera.position).addScaledVector(moonDir, lightDistance);
+            moonLight.target.position.copy(camera.position);
+            moonLight.target.updateMatrixWorld();
+
+            // Sky uniforms
+            tmpColor.copy(sunDuskColor).lerp(sunDayColor, THREE.MathUtils.clamp((h - 0.05) / 0.30, 0, 1));
+            blendSky(skyUniforms.topColor.value, skyTopNightColor, skyTopDuskColor, skyTopDayColor, h);
+            skyUniforms.bottomColor.value.copy(skyColor);
+            skyUniforms.sunDir.value.copy(sunDir);
+            skyUniforms.sunColor.value.copy(tmpColor);
+            skyUniforms.sunGlow.value = Math.pow(daylight, 0.8) * 0.55;
+            skyDome.position.copy(camera.position);
+
+            // Sun / moon sprites
+            const skyDistance = 300;
+            sunBody.position.copy(camera.position).addScaledVector(sunDir, skyDistance);
+            moonBody.position.copy(camera.position).addScaledVector(moonDir, skyDistance);
+
+            const sunBrightness = 0.55 + 0.55 * daylight;
+            sunSpriteMat.color.setRGB(1.0, 0.9, 0.72).multiplyScalar(sunBrightness);
+            sunSpriteMat.opacity = THREE.MathUtils.clamp((h + 0.08) / 0.25, 0, 1) * 0.85;
+            sunBody.visible = sunSpriteMat.opacity > 0.01;
+
+            moonSpriteMat.opacity = THREE.MathUtils.clamp((-h + 0.08) / 0.25, 0, 1) * 0.85;
+            moonBody.visible = moonSpriteMat.opacity > 0.01;
+
+            // Stars
+            starGroup.position.copy(camera.position);
+            starGroup.quaternion.setFromAxisAngle(celestialAxis, angle);
+            starMat.opacity = Math.pow(1 - daylight, 1.6) * 0.95;
+            starGroup.visible = starMat.opacity > 0.02;
+
+            // Cloud tint — stays neutral white at noon, softly warm at dusk, cool at night
+            if (h >= 0.20) {
+                cloudTint.copy(cloudDayTint);
+            } else if (h > -0.10) {
+                const t = (h + 0.10) / 0.30;
+                if (t < 0.5) cloudTint.copy(cloudNightTint).lerp(cloudDuskTint, t * 2);
+                else         cloudTint.copy(cloudDuskTint).lerp(cloudDayTint, (t - 0.5) * 2);
+            } else {
+                cloudTint.copy(cloudNightTint);
+            }
+
+            // Update each cloud layer
+            cloudGroup.position.set(camera.position.x, 0, camera.position.z);
+            for (const layer of cloudLayers) {
+                layer.mat.color.copy(cloudTint);
+                layer.tex.offset.x += delta * layer.cfg.windX;
+                layer.tex.offset.y += delta * layer.cfg.windY;
+                // Clouds slightly more visible at noon
+                layer.mat.opacity = layer.cfg.opacity * (0.55 + 0.45 * daylight);
+            }
+
+            // Post-processing strengths
+            bloomPass.strength = 0.16 + 0.22 * daylight;
+            halationUniforms.strength.value = 0.6 * daylight;
+            godRaysUniforms.rayTint.value.copy(sunDuskColor).lerp(sunDayColor, THREE.MathUtils.clamp((h - 0.05) / 0.30, 0, 1));
+
+            godRayDaylight = daylight;
+            godRayHorizonH = h;
+        }
+
+        function updateGodRayUniforms() {
+            camera.updateMatrixWorld();
+            camera.getWorldDirection(camForward);
+            camToSun.copy(sunBody.position).sub(camera.position).normalize();
+
+            if (camForward.dot(camToSun) <= 0 || godRayDaylight < 0.01) {
+                godRaysUniforms.visibility.value = 0;
+                return;
+            }
+
+            sunProjNDC.copy(sunBody.position).project(camera);
+            godRaysUniforms.sunPosition.value.set(
+                (sunProjNDC.x + 1) * 0.5,
+                (sunProjNDC.y + 1) * 0.5
+            );
+
+            const edgeX = 1.0 - Math.min(Math.abs(sunProjNDC.x), 1.0);
+            const edgeY = 1.0 - Math.min(Math.abs(sunProjNDC.y), 1.0);
+            const edgeFade = THREE.MathUtils.smoothstep(Math.min(edgeX, edgeY), 0.0, 0.35);
+            const horizonBoost = 0.55 + 0.45 * (1.0 - Math.min(Math.abs(godRayHorizonH) * 3.0, 1.0));
+
+            godRaysUniforms.visibility.value = edgeFade * godRayDaylight * horizonBoost;
+        }
+
+        // ============================================================
+        // 13. RESIZE + MAIN LOOP
+        // ============================================================
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+            bloomPass.setSize(window.innerWidth, window.innerHeight);
+            halationUniforms.resolution.value.set(window.innerWidth, window.innerHeight);
         });
 
         const fpsElement = document.getElementById('fps-counter');
         let frameCount = 0;
         let lastTime = performance.now();
+        let lastFrameTime = performance.now();
 
         function animate() {
             requestAnimationFrame(animate);
 
-            // FPS Tracker
-            frameCount++;
             const now = performance.now();
+            const delta = Math.min((now - lastFrameTime) / 1000, 0.1);
+            lastFrameTime = now;
+
+            frameCount++;
             if (now - lastTime >= 250) {
-                const fps = Math.round((frameCount * 1000) / (now - lastTime));
-                fpsElement.textContent = `${fps} FPS`;
+                fpsElement.textContent = `${Math.round((frameCount * 1000) / (now - lastTime))} FPS`;
                 frameCount = 0;
                 lastTime = now;
             }
 
+            updateDayNightCycle(delta);
             computeKinematics();
-            renderer.render(scene, camera);
+            if (meshDirty) buildWorldMesh();
+            updateGodRayUniforms();
+            composer.render();
         }
 
         animate();
